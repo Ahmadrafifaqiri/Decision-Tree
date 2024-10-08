@@ -1,0 +1,225 @@
+import pandas as pd
+import pprint
+import dataset
+import numpy as np
+import statistics
+
+def calc_entropy(df):
+  attribute = df.keys()[-1]
+  values = df[attribute].unique()
+  entropy = 0.0
+  for value in values:
+    prob = df[attribute].value_counts()[value]/len(df[attribute])
+    entropy += -prob * np.log2(prob)
+  return np.float(entropy)
+
+def calc_majority_error(df):
+  attribute = df.keys()[-1]
+  values = df[attribute].unique()
+  majority_error = 1.0
+  for value in values:
+    prob = len(df[attribute][df[attribute] == value])/len(df[attribute])
+    majority_error = min(majority_error, prob)
+  return np.float(majority_error)
+
+def calc_gini_index(df):
+  attribute = df.keys()[-1]
+  values = df[attribute].unique()
+  gini_index = 1.0
+  for value in values:
+    prob = df[attribute].value_counts()[value]/len(df[attribute])
+    gini_index -= prob**2 
+  return np.float(gini_index)
+
+def max_entropy_attribute(df, attribute):
+  target_attribute = df.keys()[-1]
+  target_values = df[target_attribute].unique()
+  attribute_values = df[attribute].unique()
+  avg_entropy = 0.0
+  for attrValue in attribute_values:
+    entropy = 0.0
+    for targetValue in target_values:
+      num = len(df[attribute][df[attribute] == attrValue][df[target_attribute] == targetValue])
+      den = len(df[attribute][df[attribute] == attrValue])
+      prob = num/den
+      entropy += -prob * np.log2(prob + 0.000001)
+    avg_entropy += (den/len(df))*entropy
+  return np.float(avg_entropy)
+
+def max_ME_attribute(df, attribute):
+  target_attribute = df.keys()[-1]
+  target_values = df[target_attribute].unique()
+  attribute_values = df[attribute].unique()
+  avg_ME = 0.0
+  for attrValue in attribute_values:
+    ME = 1.0
+    for targetValue in target_values:
+      num = len(df[attribute][df[attribute] == attrValue][df[target_attribute] == targetValue])
+      den = len(df[attribute][df[attribute] == attrValue])
+      prob = num/den
+      ME = min(ME, prob)
+    avg_ME += (den/len(df))*ME
+  return np.float(avg_ME)
+
+def max_GI_attribute(df, attribute):
+  target_attribute = df.keys()[-1]
+  target_values = df[target_attribute].unique()
+  attribute_values = df[attribute].unique()
+  avg_GI = 0.0
+  for attrValue in attribute_values:
+    GI = 1.0
+    for targetValue in target_values:
+      num = len(df[attribute][df[attribute] == attrValue][df[target_attribute] == targetValue])
+      den = len(df[attribute][df[attribute] == attrValue])
+      prob = num/den
+      GI -= prob**2
+    avg_GI += (den/len(df))*GI
+  return np.float(avg_GI)
+
+def checkAlreadyInSubTree(tree, candidate_attribute):
+  if candidate_attribute in tree.keys():
+    return True
+  return False
+
+def max_InfoGain_Attribute(df, algorithm, tree):
+  IG = []
+  if(algorithm == "majority error"):
+    for key in df.keys()[:-1]:
+      IG.append(calc_majority_error(df) - max_ME_attribute(df, key))
+    if(tree!=None and checkAlreadyInSubTree(tree, df.keys()[:-1][np.argmax(IG)])):
+      return df.keys()[:-1][np.argmax(IG[1:])]
+    return df.keys()[:-1][np.argmax(IG)]
+  elif(algorithm == "entropy"):
+    for key in df.keys()[:-1]:
+      IG.append(calc_entropy(df) - max_entropy_attribute(df, key))
+    if(tree!=None and checkAlreadyInSubTree(tree, df.keys()[:-1][np.argmax(IG)])):
+      return df.keys()[:-1][np.argmax(IG[1:])]
+    return df.keys()[:-1][np.argmax(IG)]
+  elif(algorithm == "gini index"):
+    for key in df.keys()[:-1]:
+      IG.append(calc_gini_index(df) - max_GI_attribute(df, key))
+    if(tree!=None and checkAlreadyInSubTree(tree, df.keys()[:-1][np.argmax(IG)])):
+      return df.keys()[:-1][np.argmax(IG[1:])]
+    return df.keys()[:-1][np.argmax(IG)]
+
+def get_subset(df, attribute, value):
+  return df[df[attribute] == value].reset_index(drop = True)
+
+def DecisionTreeClassifier(df, algorithm, maxDepth=100, tree = None):
+  selected_attribute = max_InfoGain_Attribute(df, algorithm, tree)
+  attribute_values = np.unique(df[selected_attribute])
+  target_attribute = df.keys()[-1]
+  if tree is None:
+    tree = {}
+    tree[selected_attribute] = {}
+  for attrValue in attribute_values:
+    subset = get_subset(df,selected_attribute,attrValue)
+    labels_for_attrValue, counts = np.unique(subset[target_attribute], return_counts = True)
+    if len(counts) == 1:
+      tree[selected_attribute][attrValue] = labels_for_attrValue[0]
+    else:
+      maxDepth-=1
+      if(maxDepth>0):
+        tree[selected_attribute][attrValue] = DecisionTreeClassifier(subset, algorithm, maxDepth)
+      else:
+        tree[selected_attribute][attrValue] = df[selected_attribute].mode()[0]
+  return tree
+
+def predict(instance, tree):
+  for node in tree.keys():
+    attribute = instance[node]
+    if(attribute not in tree[node].keys()):
+      return "NotALeaf"
+    value = tree[node][attribute]
+    if type(value) is dict:
+      return predict(instance, value)
+    else:
+      return value
+     
+def evaluate(df_test, tree, train_or_test):
+  predicted_labels= []
+  correct_prediction = 0
+  for i in range(len(df_test)):
+    instance = df_test.iloc[i,:]
+    prediction = predict(instance, tree)
+    predicted_labels.append(prediction)
+  for i in range(len(df_test)):
+    if(df_test.iloc[i,-1] == predicted_labels[i]):
+      correct_prediction+=1
+  print(train_or_test + " accuracy = ", correct_prediction/len(df_test), "\n") 
+
+#replace numeric attribute values with median threshold
+def median_thresholding(df, attribute):
+  threshold = df[attribute].median()
+  df[attribute] = (df[attribute] >= threshold).astype(int)
+
+#function to replace unknown values in training dataset with most common value
+def replace_unknown_values(df, attribute):
+  replacement = df[attribute][df[attribute]!="unknown"].mode()[0]
+  df[attribute] = df[attribute].replace(to_replace = "unknown", value = replacement)
+
+def algorithm_option(option):
+  switcher = { 1 : "majority error", 2 : "entropy", 3 : "gini index"}
+  if(option not in [1,2,3]):
+    while(option not in [1, 2,3]):
+      print("Please select within provided options: ")
+      option = int(input())
+      if(option in [1,2,3]):
+        break
+  return switcher.get(option)
+
+if __name__ == "__main__":
+
+    choiceOfDataset = True if int(input("\n1 - Car Dataset\n2 - Bank Dataset\nEnter your choice: ")) == 1 else False
+
+    if choiceOfDataset: 
+      '''
+      get car dataset - maxDepth asked is 6
+      '''
+      maxDepth = int(input("\nEnter maxdepth (1-6) or any number for full tree: "))
+      df_train = pd.read_csv("/Users/u1503285/CS-6350-ML/DecisionTree/car/train.csv")
+      df_train.columns = dataset.car_columns
+      df_test = pd.read_csv("/Users/u1503285/CS-6350-ML/DecisionTree/car/test.csv")
+      df_test.columns = dataset.car_columns
+    else:
+      '''
+      get bank dataset - maxDepth asked in 16, numeric attributes are thresholded with median value,
+      attributes with unknown value are replaced with most common value
+      '''
+      maxDepth = int(input("\nEnter maxdepth (1-16) or any number full tree: "))
+      df_train = pd.read_csv("/Users/u1503285/CS-6350-ML/DecisionTree/bank/train.csv")
+      df_train.columns = dataset.bank_columns
+      df_test = pd.read_csv("/Users/u1503285/CS-6350-ML/DecisionTree/bank/test.csv")
+      df_test.columns = dataset.bank_columns
+      numeric_attributes = ["age", "balance", "day", "duration", "campaign", "pdays", "previous"]
+      for numeric_attr in numeric_attributes:
+        median_thresholding(df_train, numeric_attr)
+        median_thresholding(df_test, numeric_attr)
+      attributes_with_unknown = ["job", "education", "contact", "poutcome"]
+      for unknown_attrs in attributes_with_unknown:
+        replace_unknown_values(df_train, unknown_attrs)
+      
+
+
+    if ((choiceOfDataset and maxDepth > 6) or (not(choiceOfDataset) and maxDepth>16)):
+      #run ID3 only once for maxDepth
+      option = int(input("\nOptions:\n1 - majority error\n2 - entropy\n3 - gini index\nEnter your option: "))
+      tree = DecisionTreeClassifier(df_train, algorithm_option(option))
+      evaluate(df_train, tree, "training")
+      evaluate(df_test, tree, "testing")
+    else:
+      #run ID3 for all depths till maxDepth
+      for i in range(1, maxDepth+1):
+        print("For a tree of maxdepth ", i ,":\n")
+        tree = DecisionTreeClassifier(df_train, "majority error", i)
+        print("Using majority error,\n")
+        evaluate(df_train, tree, "training")
+        evaluate(df_test, tree, "testing")
+        tree = DecisionTreeClassifier(df_train, "entropy", i)
+        print("Using entropy,\n")
+        evaluate(df_train, tree, "training")
+        evaluate(df_test, tree, "testing")
+        tree = DecisionTreeClassifier(df_train, "gini index", i)        
+        print("Using gini index,\n")
+        evaluate(df_train, tree, "training")
+        evaluate(df_test, tree, "testing")
